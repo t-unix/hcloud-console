@@ -19,6 +19,21 @@ const (
 	ansiClear      = "\x1b[2J\x1b[H"
 	ansiHideCursor = "\x1b[?25l"
 	ansiShowCursor = "\x1b[?25h"
+
+	// ansiHardReset is a defensive bundle of escape sequences for
+	// clearing every bit of terminal state we (or anything that ran
+	// before us, like the bubbletea-based picker) might have set:
+	// alt-screen, cursor visibility, mouse-tracking modes, SGR, and
+	// the title bar. Sent both on entering and on leaving raw mode.
+	ansiHardReset = "\x1b[?1049l" + // exit alt-screen
+		"\x1b[?25h" + //   show cursor
+		"\x1b[?1000l" + // disable mouse button tracking
+		"\x1b[?1002l" + // disable mouse drag tracking
+		"\x1b[?1003l" + // disable mouse motion tracking
+		"\x1b[?1006l" + // disable SGR mouse mode
+		"\x1b[?2004l" + // disable bracketed paste
+		"\x1b[0m" + //    reset SGR
+		"\x1b]0;\x07" //  clear terminal title
 )
 
 func newRenderer(out io.Writer) *renderer {

@@ -47,7 +47,12 @@ func runTTY(wsURL, password string) error {
 		return fmt.Errorf("raw mode: %w", err)
 	}
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
-	defer fmt.Fprint(os.Stdout, ansiShowCursor+ansiReset+"\x1b]0;\x07")
+	// Cleanup BOTH on entry and exit: bubbletea (used by go-fzf)
+	// sometimes leaves alt-screen, mouse tracking, or hidden-cursor
+	// state behind that only becomes visible once we tear our raw-mode
+	// rendering down. Pre-emptively flush it.
+	fmt.Fprint(os.Stdout, ansiHardReset)
+	defer fmt.Fprint(os.Stdout, ansiHardReset)
 
 	rend := newRenderer(os.Stdout)
 	rend.reset()
