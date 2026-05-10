@@ -12,6 +12,9 @@ import (
 // Mode selector
 var flagTTY = flag.Bool("tty", false, "render the console in this terminal instead of opening a browser")
 
+// VM picker
+var flagSelect = flag.Bool("select", false, "interactively pick a server from `hcloud server list` (implicit when no server arg is given)")
+
 // Shared flags
 var (
 	flagWS        = flag.String("ws", "", "explicit wss URL (use with -pw)")
@@ -84,11 +87,25 @@ func obtainCredentials() (string, string, error) {
 		}
 		return parseHcloudOutput(string(b))
 	}
-	if flag.NArg() < 1 {
-		flag.Usage()
-		os.Exit(2)
+	var server string
+	switch {
+	case *flagSelect:
+		var err error
+		server, err = selectServer()
+		if err != nil {
+			return "", "", err
+		}
+	case flag.NArg() >= 1:
+		server = flag.Arg(0)
+	default:
+		// No server argument and nothing else specified — drop into
+		// the interactive picker.
+		var err error
+		server, err = selectServer()
+		if err != nil {
+			return "", "", err
+		}
 	}
-	server := flag.Arg(0)
 	fmt.Fprintf(os.Stderr, "Requesting console for %s...\n", server)
 	out, err := exec.Command("hcloud", "server", "request-console", server).CombinedOutput()
 	if err != nil {

@@ -52,6 +52,12 @@ hcloud-console <server-id-or-name>
 
 # Terminal — Ctrl+] to disconnect
 hcloud-console --tty <server-id-or-name>
+
+# Pick the server interactively from `hcloud server list` via fuzzy
+# finder. Implicit when no server arg is given; --select makes it
+# explicit (useful if you've also passed --tty etc.).
+hcloud-console
+hcloud-console --select --tty
 ```
 
 ### Common flags
@@ -59,6 +65,7 @@ hcloud-console --tty <server-id-or-name>
 | Flag | Purpose |
 | --- | --- |
 | `--tty` | Render the console as text in this terminal instead of opening a browser |
+| `--select` | Interactively pick a server with fuzzy search (implicit when no server arg) |
 | `--from-stdin` | Read hcloud output from stdin instead of running `hcloud` |
 | `--ws URL --pw PW` | Skip `hcloud` and use explicit credentials |
 | `--debug FILE` | Append protocol/decoder traces to FILE |
