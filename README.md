@@ -11,13 +11,18 @@ VNC password. This single Go binary does the heavy lifting:
   [noVNC](https://github.com/novnc/noVNC) client over `127.0.0.1` and
   opens `vnc.html` in your default browser with auto-connect.
 - **Terminal mode** (`--tty`): speaks RFB over the same wss URL, decodes
-  each 8×16 cell back to a character against the embedded PSF font, and
-  renders the console as ANSI text with full keyboard input. No browser,
-  no OCR.
+  each 8×16 framebuffer cell back to a character by hashing it against
+  an embedded PSF font, and renders the console as ANSI text with full
+  keyboard input. **Not OCR, not ASCII-art** — deterministic glyph
+  matching, so the output is real selectable text.
 
 The browser talks directly to `web-console.hetzner.cloud` over TLS in
 both modes — the local server is just a static file host for the noVNC
 JS, never a proxy.
+
+> **Not to be confused with** [hilbix/hcloud-console](https://github.com/hilbix/hcloud-console),
+> which is an unrelated Python+MongoDB project that solves a similar
+> problem with a self-hosted web service.
 
 ## Requirements
 
