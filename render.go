@@ -4,14 +4,19 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 )
 
 type renderer struct {
-	out      io.Writer
-	prev     *grid
-	curFG    uint32
-	curBG    uint32
-	cursorOK bool
+	out io.Writer
+
+	mu        sync.Mutex
+	prev      *grid // last grid we diffed against
+	last      *grid // most recent frame (for re-rendering on resize)
+	curFG     uint32
+	curBG     uint32
+	cursorOK  bool
+	forceFull bool
 }
 
 const (
@@ -44,6 +49,8 @@ func newRenderer(out io.Writer) *renderer {
 	}
 }
 
+// reset clears the screen and forgets all per-frame state. The caller
+// must hold r.mu.
 func (r *renderer) reset() {
 	fmt.Fprint(r.out, ansiReset+ansiClear)
 	r.prev = nil
@@ -51,12 +58,39 @@ func (r *renderer) reset() {
 	r.curBG = 0xFFFFFFFF
 }
 
+// Reset is the externally-callable variant — locks first.
+func (r *renderer) Reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reset()
+}
+
+// RequestFull marks the next draw as a full redraw and immediately
+// re-renders the most recent frame (if any). Called from the SIGWINCH
+// handler so the user gets an instant repaint when they resize the
+// terminal — without waiting for the next framebuffer update from the
+// server.
+func (r *renderer) RequestFull() {
+	r.mu.Lock()
+	r.forceFull = true
+	g := r.last
+	r.mu.Unlock()
+	if g != nil {
+		r.draw(g)
+	}
+}
+
 func (r *renderer) draw(g *grid) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if g == nil {
 		return
 	}
-	full := r.prev == nil ||
+	r.last = g
+	full := r.forceFull ||
+		r.prev == nil ||
 		r.prev.cols != g.cols || r.prev.rows != g.rows
+	r.forceFull = false
 	if full {
 		r.reset()
 	}
@@ -116,6 +150,8 @@ func (r *renderer) draw(g *grid) {
 // drawNotice is shown when the frame is in graphical mode (matchRate too
 // low to plausibly decode as text). We blank our output and tell the user.
 func (r *renderer) drawNotice(rfb *rfbConn, g *grid) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.reset()
 	rate := 0.0
 	cw, ch := 0, 0

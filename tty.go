@@ -55,11 +55,22 @@ func runTTY(wsURL, password string) error {
 	defer fmt.Fprint(os.Stdout, ansiHardReset)
 
 	rend := newRenderer(os.Stdout)
-	rend.reset()
+	rend.Reset()
 
 	if err := rfb.requestUpdate(false); err != nil {
 		return err
 	}
+
+	// On terminal resize, force a full client-side redraw so the new
+	// window size doesn't leave stale content from the old layout.
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
+	defer signal.Stop(winch)
+	go func() {
+		for range winch {
+			rend.RequestFull()
+		}
+	}()
 
 	errCh := make(chan error, 2)
 	go func() { errCh <- readLoop(rfb, rend) }()
