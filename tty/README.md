@@ -29,7 +29,9 @@ directory; the resulting binary has no runtime dependencies.
 hcloud-console-tty <server-id-or-name>
 ```
 
-Press **Ctrl+]** to exit (Ctrl+C is forwarded to the remote shell).
+Press **Ctrl+]** to disconnect and return to your local shell. The hint is
+also set as the terminal title for the duration of the session. Ctrl+C and
+all other control characters are forwarded to the remote shell.
 
 ### Flags
 
@@ -38,8 +40,26 @@ Press **Ctrl+]** to exit (Ctrl+C is forwarded to the remote shell).
 | `-from-stdin` | Read hcloud output from stdin instead of invoking it |
 | `-ws URL -pw PW` | Skip hcloud and connect directly with explicit credentials |
 | `-once` | Render a single frame and exit (handy for scripting) |
+| `-send STRING` | Scripted-input mode: send keystrokes and capture the result. Escapes: `\n` Enter, `\t` Tab, `\b` Backspace, `\e` Esc, `\^x` Ctrl+x, `\U \D \L \R` arrows, `\H \E` Home/End. |
+| `-send-delay D` | Delay between scripted keystrokes (default 80ms) |
+| `-settle D` | Wait this long after the last keystroke for the framebuffer to update (default 1.5s) |
 | `-debug FILE` | Append per-step protocol/decoder traces to FILE |
-| `-dump-fb FILE` | Save a PPM of the framebuffer (with `-once`) |
+| `-dump-fb FILE` | Save a PPM of the framebuffer (with `-once` or `-send`) |
+
+### Verified keyboard handling
+
+The following all work end-to-end against a Linux text-mode console:
+
+- All ASCII printables, including capital letters and shifted symbols
+  (`!@#$%^&*()_+{}|:<>?~"`). Note: QEMU's VNC server treats keysyms as
+  US-layout physical keys and does not auto-shift, so we synthesise a
+  Shift_L press/release around the base key for the affected codepoints.
+- Backspace, Tab (with completion), Enter, Esc.
+- Arrow keys for shell history and editor navigation.
+- Function keys F1–F12, Home/End/PageUp/PageDown/Insert/Delete.
+- Ctrl+letter combinations (Ctrl+C, Ctrl+D, Ctrl+L, Ctrl+U, Ctrl+R, …).
+- vi: insert mode, normal-mode commands, **`:` line mode** (`:wq`,
+  `:%s/foo/bar/g`, …), search (`/`, `?`).
 
 ## How it works
 

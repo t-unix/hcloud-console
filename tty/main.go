@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"regexp"
 	"syscall"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -21,6 +22,11 @@ var (
 	flagDebug     = flag.String("debug", "", "write debug log to this file")
 	flagOnce      = flag.Bool("once", false, "connect, render one frame, exit (non-interactive)")
 	flagDumpFB    = flag.String("dump-fb", "", "write a PPM of the captured framebuffer (for debugging)")
+	flagSend      = flag.String("send", "", "scripted-input mode: send these keystrokes and exit. "+
+		"Escapes: \\n=Enter \\t=Tab \\b=Backspace \\e=Esc \\\\=backslash. "+
+		"Capture final frame; combine with -dump-fb to save the framebuffer.")
+	flagSendDelay = flag.Duration("send-delay", 80_000_000, "delay between scripted keystrokes (default 80ms)")
+	flagSettleMS  = flag.Duration("settle", 1_500_000_000, "after sending, wait this long for the framebuffer to settle (default 1.5s)")
 )
 
 func main() {
@@ -102,18 +108,30 @@ func run(wsURL, password string) error {
 
 	debug("connected: %dx%d %q", rfb.width, rfb.height, rfb.name)
 
+	if *flagSend != "" {
+		return runSend(rfb, *flagSend)
+	}
+
 	if *flagOnce {
 		return runOnce(rfb)
 	}
 
 	checkTerminalSize(rfb)
 
+	fmt.Fprintf(os.Stderr,
+		"connected to %s — press \x1b[1mCtrl+]\x1b[0m to disconnect\n",
+		rfb.name)
+	// Set terminal title so the shortcut is always visible.
+	fmt.Fprintf(os.Stdout,
+		"\x1b]0;hcloud-console-tty • %s • Ctrl+] disconnects\x07",
+		rfb.name)
+
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		return fmt.Errorf("raw mode: %w", err)
 	}
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
-	defer fmt.Fprint(os.Stdout, ansiShowCursor+ansiReset)
+	defer fmt.Fprint(os.Stdout, ansiShowCursor+ansiReset+"\x1b]0;\x07")
 
 	rend := newRenderer(os.Stdout)
 	rend.reset()
@@ -185,17 +203,214 @@ func runOnce(rfb *rfbConn) error {
 		fmt.Fprintln(os.Stderr, "low match rate — likely graphical mode")
 		return nil
 	}
+	printGrid(g)
+	return nil
+}
+
+func printGrid(g *grid) {
+	// Trim trailing all-blank rows so output isn't padded with empty lines.
+	last := -1
 	for r := 0; r < g.rows; r++ {
+		nonBlank := false
+		for c := 0; c < g.cols; c++ {
+			if ch := g.cells[r][c].ch; ch != 0 && ch != ' ' {
+				nonBlank = true
+				break
+			}
+		}
+		if nonBlank {
+			last = r
+		}
+	}
+	for r := 0; r <= last; r++ {
+		var line []rune
 		for c := 0; c < g.cols; c++ {
 			ch := g.cells[r][c].ch
 			if ch == 0 {
 				ch = ' '
 			}
-			fmt.Print(string(ch))
+			line = append(line, ch)
 		}
-		fmt.Println()
+		// Trim trailing spaces on each line.
+		i := len(line)
+		for i > 0 && line[i-1] == ' ' {
+			i--
+		}
+		fmt.Println(string(line[:i]))
 	}
+}
+
+// parseScript turns a script string into the same keyEvent stream that
+// readKey would produce from a real terminal. Escape sequences:
+//
+//	\n  Return       \t  Tab        \b  Backspace
+//	\e  Escape       \\  literal backslash
+//	\^x Ctrl+x       \U  Up         \D  Down       \L  Left      \R  Right
+//	\H  Home         \E  End        \PgUp \PgDn   \F1..\F12
+func parseScript(s string) ([]keyEvent, error) {
+	var out []keyEvent
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '\\' {
+			out = append(out, asciiToEvent(c))
+			continue
+		}
+		i++
+		if i >= len(s) {
+			return nil, fmt.Errorf("trailing backslash in script")
+		}
+		switch s[i] {
+		case 'n':
+			out = append(out, keyEvent{keysym: ksReturn})
+		case 't':
+			out = append(out, keyEvent{keysym: ksTab})
+		case 'b':
+			out = append(out, keyEvent{keysym: ksBackspace})
+		case 'e':
+			out = append(out, keyEvent{keysym: ksEscape})
+		case '\\':
+			out = append(out, keyEvent{keysym: '\\'})
+		case 'U':
+			out = append(out, keyEvent{keysym: ksUp})
+		case 'D':
+			out = append(out, keyEvent{keysym: ksDown})
+		case 'L':
+			out = append(out, keyEvent{keysym: ksLeft})
+		case 'R':
+			out = append(out, keyEvent{keysym: ksRight})
+		case 'H':
+			out = append(out, keyEvent{keysym: ksHome})
+		case 'E':
+			out = append(out, keyEvent{keysym: ksEnd})
+		case '^':
+			i++
+			if i >= len(s) {
+				return nil, fmt.Errorf("\\^ at end of script")
+			}
+			letter := s[i]
+			if letter >= 'A' && letter <= 'Z' {
+				letter += 32
+			}
+			if letter < 'a' || letter > 'z' {
+				return nil, fmt.Errorf("\\^%c: only letters supported", letter)
+			}
+			out = append(out, keyEvent{keysym: uint32(letter), ctrl: true})
+		default:
+			return nil, fmt.Errorf("unknown escape \\%c", s[i])
+		}
+	}
+	return out, nil
+}
+
+// asciiToEvent mirrors readKey for printable ASCII: it just emits the byte
+// as a keysym. The shifted-character mapping lives inside sendKey.
+func asciiToEvent(b byte) keyEvent {
+	return keyEvent{keysym: uint32(b)}
+}
+
+// runSend connects, waits for the first frame, sends a script of keystrokes
+// (with one-second settle time at the end), captures the resulting frame,
+// and prints it as plain text. Used for automated keyboard testing.
+func runSend(rfb *rfbConn, script string) error {
+	// Get one frame so we know the screen is ready.
+	if err := rfb.requestUpdate(false); err != nil {
+		return err
+	}
+	if err := drainOneFrame(rfb); err != nil {
+		return err
+	}
+
+	keys, err := parseScript(script)
+	if err != nil {
+		return err
+	}
+
+	// Background goroutine to keep consuming framebuffer updates so the
+	// server doesn't stall on us. We also need it so we have an up-to-date
+	// pixel buffer at the end.
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- consumeFrames(rfb, stop)
+	}()
+
+	for _, ev := range keys {
+		if err := sendKey(rfb, ev); err != nil {
+			close(stop)
+			<-done
+			return err
+		}
+		time.Sleep(*flagSendDelay)
+	}
+
+	// Wait for the screen to settle, then take a snapshot.
+	time.Sleep(*flagSettleMS)
+	close(stop)
+	<-done
+
+	if *flagDumpFB != "" {
+		if err := dumpPPM(rfb, *flagDumpFB); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "wrote %s\n", *flagDumpFB)
+	}
+
+	g := decode(rfb)
+	if g == nil || g.matchRate < 0.85 {
+		fmt.Fprintln(os.Stderr, "framebuffer is not in text mode")
+		return nil
+	}
+	printGrid(g)
 	return nil
+}
+
+// drainOneFrame reads one FramebufferUpdate (skipping any Bell/Cut messages).
+func drainOneFrame(rfb *rfbConn) error {
+	for {
+		t, err := rfb.readMessageType()
+		if err != nil {
+			return err
+		}
+		if t == 0 {
+			_, err := rfb.readFramebufferUpdate()
+			return err
+		}
+		if err := rfb.drainOther(t); err != nil {
+			return err
+		}
+	}
+}
+
+// consumeFrames keeps requesting and reading incremental framebuffer
+// updates until stop is closed. It runs in a goroutine so the main thread
+// can dispatch keystrokes without blocking.
+func consumeFrames(rfb *rfbConn, stop <-chan struct{}) error {
+	if err := rfb.requestUpdate(true); err != nil {
+		return err
+	}
+	for {
+		select {
+		case <-stop:
+			return nil
+		default:
+		}
+		t, err := rfb.readMessageType()
+		if err != nil {
+			return err
+		}
+		if t == 0 {
+			if _, err := rfb.readFramebufferUpdate(); err != nil {
+				return err
+			}
+			if err := rfb.requestUpdate(true); err != nil {
+				return err
+			}
+		} else {
+			if err := rfb.drainOther(t); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func readLoop(rfb *rfbConn, rend *renderer) error {
@@ -239,11 +454,14 @@ func checkTerminalSize(rfb *rfbConn) {
 	if err != nil {
 		return
 	}
-	// Most likely text grid is 80×25; warn if terminal is too small.
-	if w < 80 || h < 25 {
+	// Estimate the cell grid (assume 8×16 cells, the common case).
+	cols := rfb.width / 8
+	rows := rfb.height / 16
+	if w < cols || h < rows {
 		fmt.Fprintf(os.Stderr,
-			"warning: terminal is %dx%d; console is typically 80x25\n",
-			w, h)
+			"warning: terminal is %dx%d but the console grid is %dx%d — "+
+				"content past the edges will be clipped/wrapped\n",
+			w, h, cols, rows)
 	}
 }
 

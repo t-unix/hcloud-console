@@ -212,11 +212,33 @@ func tildeCSI(params []byte) keyEvent {
 	return keyEvent{keysym: 0}
 }
 
+// shiftedASCII maps shifted printable ASCII keysyms to (unshifted base,
+// "needs Shift" implied). QEMU's VNC server interprets each keysym as if
+// it were a US-layout physical key — so sending the keysym for ':' makes
+// the guest see ';', not ':'. Wrap these in a Shift_L press/release.
+//
+// Capital letters (A-Z) are deliberately NOT in this table: QEMU's VNC
+// pipeline does add Shift for them automatically via the kernel keymap,
+// and synthesising another Shift would actually break ones like Ctrl+A.
+var shiftedASCII = map[uint32]uint32{
+	'!': '1', '@': '2', '#': '3', '$': '4', '%': '5',
+	'^': '6', '&': '7', '*': '8', '(': '9', ')': '0',
+	'_': '-', '+': '=',
+	'{': '[', '}': ']', '|': '\\',
+	':': ';', '"': '\'',
+	'<': ',', '>': '.', '?': '/',
+	'~': '`',
+}
+
 // sendKey delivers a keyEvent to the RFB server, wrapping the keysym in
 // modifier press/release pairs as needed.
 func sendKey(rfb *rfbConn, ev keyEvent) error {
 	if ev.keysym == 0 {
 		return nil
+	}
+	if base, ok := shiftedASCII[ev.keysym]; ok && !ev.shift && !ev.ctrl && !ev.alt {
+		ev.shift = true
+		ev.keysym = base
 	}
 	if ev.ctrl {
 		if err := rfb.keyEvent(ksControlL, true); err != nil {
