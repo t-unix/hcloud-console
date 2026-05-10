@@ -9,8 +9,12 @@ import (
 	"regexp"
 )
 
-// Mode selector
-var flagTTY = flag.Bool("tty", false, "render the console in this terminal instead of opening a browser")
+// Mode selector. Default is terminal-mode rendering; --novnc switches
+// to opening the noVNC web client in a browser.
+var (
+	flagNoVNC     = flag.Bool("novnc", false, "open the noVNC web client in your browser instead of rendering in this terminal")
+	flagGraphical = flag.Bool("graphical", false, "alias for --novnc")
+)
 
 // VM picker
 var flagSelect = flag.Bool("select", false, "interactively pick a server from `hcloud server list` (implicit when no server arg is given)")
@@ -44,9 +48,10 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr,
 			"usage: hcloud-console [flags] <server-id-or-name>\n\n"+
-				"Default: opens the noVNC web client in your browser.\n"+
-				"With -tty: decodes the framebuffer and renders the console as text\n"+
-				"in this terminal (Ctrl+] to disconnect).\n\n"+
+				"Default: decodes the framebuffer and renders the console as text\n"+
+				"in this terminal (Ctrl+] to disconnect).\n"+
+				"With -novnc (alias -graphical): opens the noVNC web client in\n"+
+				"your browser.\n\n"+
 				"Flags:\n")
 		flag.PrintDefaults()
 	}
@@ -66,10 +71,10 @@ func main() {
 		defer f.Close()
 	}
 
-	if *flagTTY {
-		err = runTTY(wsURL, password)
-	} else {
+	if *flagNoVNC || *flagGraphical {
 		err = runBrowser(wsURL, password)
+	} else {
+		err = runTTY(wsURL, password)
 	}
 	if err != nil {
 		fatal(err)

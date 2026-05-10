@@ -7,14 +7,16 @@ right in your shell.
 `hcloud server request-console <id>` only prints a WebSocket URL and a
 VNC password. This single Go binary does the heavy lifting:
 
-- **Browser mode** (default): serves the embedded
-  [noVNC](https://github.com/novnc/noVNC) client over `127.0.0.1` and
-  opens `vnc.html` in your default browser with auto-connect.
-- **Terminal mode** (`--tty`): speaks RFB over the same wss URL, decodes
+- **Terminal mode** (default): speaks RFB over the wss URL, decodes
   each 8×16 framebuffer cell back to a character by hashing it against
   an embedded PSF font, and renders the console as ANSI text with full
   keyboard input. **Not OCR, not ASCII-art** — deterministic glyph
-  matching, so the output is real selectable text.
+  matching, so the output is real selectable text. Press **Ctrl+]** to
+  disconnect.
+- **Browser mode** (`--novnc`, alias `--graphical`): serves the
+  embedded [noVNC](https://github.com/novnc/noVNC) client over
+  `127.0.0.1` and opens `vnc.html` in your default browser with
+  auto-connect.
 
 The browser talks directly to `web-console.hetzner.cloud` over TLS in
 both modes — the local server is just a static file host for the noVNC
@@ -47,24 +49,24 @@ go build -o ~/bin/hcloud-console .
 ## Usage
 
 ```bash
-# Browser (default)
+# Terminal (default) — Ctrl+] to disconnect
 hcloud-console <server-id-or-name>
 
-# Terminal — Ctrl+] to disconnect
-hcloud-console --tty <server-id-or-name>
+# Browser (noVNC)
+hcloud-console --novnc <server-id-or-name>
 
 # Pick the server interactively from `hcloud server list` via fuzzy
 # finder. Implicit when no server arg is given; --select makes it
-# explicit (useful if you've also passed --tty etc.).
+# explicit (useful in combination with --novnc, --print-only, etc.).
 hcloud-console
-hcloud-console --select --tty
+hcloud-console --select --novnc
 ```
 
 ### Common flags
 
 | Flag | Purpose |
 | --- | --- |
-| `--tty` | Render the console as text in this terminal instead of opening a browser |
+| `--novnc`, `--graphical` | Open noVNC in your browser instead of rendering in this terminal |
 | `--select` | Interactively pick a server with fuzzy search (implicit when no server arg) |
 | `--from-stdin` | Read hcloud output from stdin instead of running `hcloud` |
 | `--ws URL --pw PW` | Skip `hcloud` and use explicit credentials |
