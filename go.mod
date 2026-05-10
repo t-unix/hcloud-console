@@ -1,4 +1,4 @@
-module github.com/t-unix/hcloud-console/tty
+module github.com/t-unix/hcloud-console
 
 go 1.25.0
 

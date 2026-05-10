@@ -2,101 +2,19 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
-	"regexp"
 	"syscall"
 	"time"
 
 	"golang.org/x/term"
 )
 
-var (
-	flagWS        = flag.String("ws", "", "explicit wss URL (use with -pw)")
-	flagPW        = flag.String("pw", "", "explicit VNC password (use with -ws)")
-	flagFromStdin = flag.Bool("from-stdin", false, "read hcloud output from stdin")
-	flagDebug     = flag.String("debug", "", "write debug log to this file")
-	flagOnce      = flag.Bool("once", false, "connect, render one frame, exit (non-interactive)")
-	flagDumpFB    = flag.String("dump-fb", "", "write a PPM of the captured framebuffer (for debugging)")
-	flagSend      = flag.String("send", "", "scripted-input mode: send these keystrokes and exit. "+
-		"Escapes: \\n=Enter \\t=Tab \\b=Backspace \\e=Esc \\\\=backslash. "+
-		"Capture final frame; combine with -dump-fb to save the framebuffer.")
-	flagSendDelay = flag.Duration("send-delay", 80_000_000, "delay between scripted keystrokes (default 80ms)")
-	flagSettleMS  = flag.Duration("settle", 1_500_000_000, "after sending, wait this long for the framebuffer to settle (default 1.5s)")
-)
-
-func main() {
-	flag.Usage = func() {
-		fmt.Fprint(os.Stderr,
-			"usage: hcloud-console-tty [flags] <server-id-or-name>\n\n"+
-				"Opens a Hetzner Cloud server's text-mode console in your terminal.\n"+
-				"Press Ctrl+] to exit.\n")
-		flag.PrintDefaults()
-	}
-	flag.Parse()
-
-	wsURL, password, err := obtainCredentials()
-	if err != nil {
-		fatal(err)
-	}
-
-	if *flagDebug != "" {
-		f, err := os.Create(*flagDebug)
-		if err != nil {
-			fatal(err)
-		}
-		debugLog = f
-		defer f.Close()
-	}
-
-	if err := run(wsURL, password); err != nil {
-		fatal(err)
-	}
-}
-
-func obtainCredentials() (string, string, error) {
-	if *flagWS != "" && *flagPW != "" {
-		return *flagWS, *flagPW, nil
-	}
-	if *flagFromStdin {
-		b, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return "", "", fmt.Errorf("read stdin: %w", err)
-		}
-		return parseHcloudOutput(string(b))
-	}
-	if flag.NArg() < 1 {
-		flag.Usage()
-		os.Exit(2)
-	}
-	server := flag.Arg(0)
-	fmt.Fprintf(os.Stderr, "Requesting console for %s...\n", server)
-	out, err := exec.Command("hcloud", "server", "request-console", server).CombinedOutput()
-	if err != nil {
-		return "", "", fmt.Errorf("hcloud failed: %v\n%s", err, out)
-	}
-	return parseHcloudOutput(string(out))
-}
-
-var (
-	reWS = regexp.MustCompile(`WebSocket URL:\s*(\S+)`)
-	rePW = regexp.MustCompile(`VNC Password:\s*(\S+)`)
-)
-
-func parseHcloudOutput(s string) (string, string, error) {
-	ws := reWS.FindStringSubmatch(s)
-	pw := rePW.FindStringSubmatch(s)
-	if ws == nil || pw == nil {
-		return "", "", fmt.Errorf("could not parse hcloud output:\n%s", s)
-	}
-	return ws[1], pw[1], nil
-}
-
-func run(wsURL, password string) error {
+// runTTY drives terminal-mode rendering: connect, decode framebuffers
+// back to text, render with ANSI, forward keystrokes from stdin.
+func runTTY(wsURL, password string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer cancel()
 
@@ -111,7 +29,6 @@ func run(wsURL, password string) error {
 	if *flagSend != "" {
 		return runSend(rfb, *flagSend)
 	}
-
 	if *flagOnce {
 		return runOnce(rfb)
 	}
@@ -121,9 +38,8 @@ func run(wsURL, password string) error {
 	fmt.Fprintf(os.Stderr,
 		"connected to %s — press \x1b[1mCtrl+]\x1b[0m to disconnect\n",
 		rfb.name)
-	// Set terminal title so the shortcut is always visible.
 	fmt.Fprintf(os.Stdout,
-		"\x1b]0;hcloud-console-tty • %s • Ctrl+] disconnects\x07",
+		"\x1b]0;hcloud-console • %s • Ctrl+] disconnects\x07",
 		rfb.name)
 
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
@@ -151,7 +67,7 @@ func run(wsURL, password string) error {
 		firstErr = ctx.Err()
 	}
 	rfb.Close()
-	go func() { <-errCh }() // drain
+	go func() { <-errCh }()
 
 	if firstErr == io.EOF || firstErr == nil {
 		return nil
@@ -208,7 +124,6 @@ func runOnce(rfb *rfbConn) error {
 }
 
 func printGrid(g *grid) {
-	// Trim trailing all-blank rows so output isn't padded with empty lines.
 	last := -1
 	for r := 0; r < g.rows; r++ {
 		nonBlank := false
@@ -231,7 +146,6 @@ func printGrid(g *grid) {
 			}
 			line = append(line, ch)
 		}
-		// Trim trailing spaces on each line.
 		i := len(line)
 		for i > 0 && line[i-1] == ' ' {
 			i--
@@ -246,13 +160,13 @@ func printGrid(g *grid) {
 //	\n  Return       \t  Tab        \b  Backspace
 //	\e  Escape       \\  literal backslash
 //	\^x Ctrl+x       \U  Up         \D  Down       \L  Left      \R  Right
-//	\H  Home         \E  End        \PgUp \PgDn   \F1..\F12
+//	\H  Home         \E  End
 func parseScript(s string) ([]keyEvent, error) {
 	var out []keyEvent
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if c != '\\' {
-			out = append(out, asciiToEvent(c))
+			out = append(out, keyEvent{keysym: uint32(c)})
 			continue
 		}
 		i++
@@ -302,17 +216,9 @@ func parseScript(s string) ([]keyEvent, error) {
 	return out, nil
 }
 
-// asciiToEvent mirrors readKey for printable ASCII: it just emits the byte
-// as a keysym. The shifted-character mapping lives inside sendKey.
-func asciiToEvent(b byte) keyEvent {
-	return keyEvent{keysym: uint32(b)}
-}
-
-// runSend connects, waits for the first frame, sends a script of keystrokes
-// (with one-second settle time at the end), captures the resulting frame,
-// and prints it as plain text. Used for automated keyboard testing.
+// runSend connects, waits for the first frame, sends a script of keystrokes,
+// captures the resulting frame, and prints it as plain text.
 func runSend(rfb *rfbConn, script string) error {
-	// Get one frame so we know the screen is ready.
 	if err := rfb.requestUpdate(false); err != nil {
 		return err
 	}
@@ -325,14 +231,9 @@ func runSend(rfb *rfbConn, script string) error {
 		return err
 	}
 
-	// Background goroutine to keep consuming framebuffer updates so the
-	// server doesn't stall on us. We also need it so we have an up-to-date
-	// pixel buffer at the end.
 	stop := make(chan struct{})
 	done := make(chan error, 1)
-	go func() {
-		done <- consumeFrames(rfb, stop)
-	}()
+	go func() { done <- consumeFrames(rfb, stop) }()
 
 	for _, ev := range keys {
 		if err := sendKey(rfb, ev); err != nil {
@@ -343,7 +244,6 @@ func runSend(rfb *rfbConn, script string) error {
 		time.Sleep(*flagSendDelay)
 	}
 
-	// Wait for the screen to settle, then take a snapshot.
 	time.Sleep(*flagSettleMS)
 	close(stop)
 	<-done
@@ -364,7 +264,6 @@ func runSend(rfb *rfbConn, script string) error {
 	return nil
 }
 
-// drainOneFrame reads one FramebufferUpdate (skipping any Bell/Cut messages).
 func drainOneFrame(rfb *rfbConn) error {
 	for {
 		t, err := rfb.readMessageType()
@@ -381,9 +280,6 @@ func drainOneFrame(rfb *rfbConn) error {
 	}
 }
 
-// consumeFrames keeps requesting and reading incremental framebuffer
-// updates until stop is closed. It runs in a goroutine so the main thread
-// can dispatch keystrokes without blocking.
 func consumeFrames(rfb *rfbConn, stop <-chan struct{}) error {
 	if err := rfb.requestUpdate(true); err != nil {
 		return err
@@ -420,7 +316,7 @@ func readLoop(rfb *rfbConn, rend *renderer) error {
 			return err
 		}
 		switch t {
-		case 0: // FramebufferUpdate
+		case 0:
 			if _, err := rfb.readFramebufferUpdate(); err != nil {
 				return err
 			}
@@ -454,7 +350,6 @@ func checkTerminalSize(rfb *rfbConn) {
 	if err != nil {
 		return
 	}
-	// Estimate the cell grid (assume 8×16 cells, the common case).
 	cols := rfb.width / 8
 	rows := rfb.height / 16
 	if w < cols || h < rows {
@@ -463,18 +358,4 @@ func checkTerminalSize(rfb *rfbConn) {
 				"content past the edges will be clipped/wrapped\n",
 			w, h, cols, rows)
 	}
-}
-
-func fatal(err error) {
-	fmt.Fprintln(os.Stderr, "hcloud-console-tty:", err)
-	os.Exit(1)
-}
-
-var debugLog io.Writer
-
-func debug(format string, args ...any) {
-	if debugLog == nil {
-		return
-	}
-	fmt.Fprintf(debugLog, format+"\n", args...)
 }
