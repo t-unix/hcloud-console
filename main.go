@@ -72,8 +72,10 @@ func main() {
 	}
 
 	if *flagNoVNC || *flagGraphical {
+		fmt.Fprintln(os.Stderr, "Mode: browser (noVNC)")
 		err = runBrowser(wsURL, password)
 	} else {
+		fmt.Fprintln(os.Stderr, "Mode: terminal")
 		err = runTTY(wsURL, password)
 	}
 	if err != nil {
@@ -103,13 +105,10 @@ func obtainCredentials() (string, string, error) {
 	case flag.NArg() >= 1:
 		server = flag.Arg(0)
 	default:
-		// No server argument and nothing else specified — drop into
-		// the interactive picker.
-		var err error
-		server, err = selectServer()
-		if err != nil {
-			return "", "", err
-		}
+		// No server argument and no flag combination forced a mode —
+		// show usage and exit. The picker is opt-in via --select.
+		flag.Usage()
+		os.Exit(2)
 	}
 	fmt.Fprintf(os.Stderr, "Requesting console for %s...\n", server)
 	out, err := exec.Command("hcloud", "server", "request-console", server).CombinedOutput()
