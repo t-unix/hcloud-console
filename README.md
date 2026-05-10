@@ -137,6 +137,28 @@ To add another OS that uses a different font, drop the bitmap into
 `font.go` and append to the `fonts` slice — the auto-selector picks it
 up automatically.
 
+### Bootstrap fallback (unknown fonts)
+
+If none of the embedded fonts is a good fit (match rate < 95%), the
+decoder tries to **learn the font from the framebuffer itself** by
+searching for well-known literal anchor strings — `"checking"`,
+`"running"`, `"Password:"`, `"OpenBSD"`, `"boot"`, `"root"`, etc. Each
+match contributes (bitmap → rune) pairs that are then cross-validated
+across multiple anchors before being accepted into a runtime font.
+
+Anchors with internal repeated letters (`"checking"` — 'c' at positions
+0 and 3, `"running"` — 'n' at 2/3/5, etc.) impose positional constraints
+that random text almost never satisfies, so a single match of one of
+those is reliable enough to seed the font. Anchors that match multiple
+times, anchors with multiple internal repeats, or bitmaps voted for by
+more than one anchor are all treated as high-confidence; everything else
+is dropped.
+
+In practice this gives ≈70% match rate on a fresh OS we don't have a
+font for — readable boot messages and login prompt, with some
+nearest-neighbour fuzziness for letters not seen in any anchor. Add the
+font properly when you encounter the system regularly.
+
 ### Limitations of terminal mode
 
 - Text mode only. When the VM switches to a graphical mode (X server,

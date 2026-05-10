@@ -116,8 +116,8 @@ func runOnce(rfb *rfbConn) error {
 		g.matchRate*100)
 
 	if g.matchRate < 0.85 {
-		fmt.Fprintln(os.Stderr, "low match rate — likely graphical mode")
-		return nil
+		fmt.Fprintln(os.Stderr,
+			"low match rate — printing anyway (likely graphical mode or unknown font)")
 	}
 	printGrid(g)
 	return nil
@@ -321,10 +321,15 @@ func readLoop(rfb *rfbConn, rend *renderer) error {
 				return err
 			}
 			g := decode(rfb)
-			if g != nil && g.matchRate >= 0.85 {
+			// Threshold 0.5 instead of 0.85 — anchor-bootstrapped
+			// fonts typically score 60–80% on unknown systems and
+			// the partial output is still readable. Truly graphical
+			// frames score near zero because no glyph patterns exist.
+			if g != nil && g.matchRate >= 0.5 {
 				rend.draw(g)
-				debug("frame: %dx%d cells %dx%d match=%.2f",
-					g.cols, g.rows, g.cellW, g.cellH, g.matchRate)
+				debug("frame: %dx%d cells %dx%d font=%s match=%.2f",
+					g.cols, g.rows, g.cellW, g.cellH,
+					fontName(g), g.matchRate)
 			} else {
 				rend.drawNotice(rfb, g)
 				if g != nil {
@@ -340,6 +345,13 @@ func readLoop(rfb *rfbConn, rend *renderer) error {
 			}
 		}
 	}
+}
+
+func fontName(g *grid) string {
+	if g == nil || g.font == nil {
+		return "?"
+	}
+	return g.font.name
 }
 
 func checkTerminalSize(rfb *rfbConn) {

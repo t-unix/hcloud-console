@@ -25,26 +25,45 @@ type grid struct {
 
 // decode tries known cell-size candidates with each available font and
 // returns the best fit. Returns nil if nothing fits.
+//
+// Strategy: try every (cell-size × embedded-font) combination and pick
+// the highest exact-match rate on non-blank cells. If none of the
+// embedded fonts is a great fit, fall back to a font *learned* from the
+// framebuffer itself by anchor-string discovery (bootstrap.go).
 func decode(rfb *rfbConn) *grid {
 	w, h := rfb.width, rfb.height
-	candidates := []struct{ cw, ch int }{
+	candidates := []cellSize{
 		{9, 16}, // BIOS / OpenBSD / DOS — 720×400 etc.
 		{8, 16}, // Linux fbcon
 		{8, 8},
 	}
 	var best *grid
-	for _, c := range candidates {
-		if w%c.cw != 0 || h%c.ch != 0 {
-			continue
-		}
-		for _, f := range fonts {
+	tryFont := func(f *font) {
+		for _, c := range candidates {
+			if w%c.cw != 0 || h%c.ch != 0 {
+				continue
+			}
 			g := decodeAt(rfb, c.cw, c.ch, f)
 			if best == nil || g.matchRate > best.matchRate {
 				best = g
 			}
-			if best.matchRate >= 0.99 {
+		}
+	}
+
+	if !*flagNoFonts {
+		for _, f := range fonts {
+			tryFont(f)
+			if best != nil && best.matchRate >= 0.99 {
 				return best
 			}
+		}
+	}
+
+	// Embedded fonts didn't fit perfectly — try bootstrapping a font
+	// from anchor strings on screen.
+	if best == nil || best.matchRate < 0.95 {
+		for _, f := range bootstrapFontsFor(rfb, candidates) {
+			tryFont(f)
 		}
 	}
 	return best

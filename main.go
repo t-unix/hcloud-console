@@ -30,6 +30,7 @@ var (
 var (
 	flagOnce      = flag.Bool("once", false, "(tty) connect, render one frame, exit")
 	flagDumpFB    = flag.String("dump-fb", "", "(tty) write a PPM of the framebuffer (with -once or -send)")
+	flagNoFonts   = flag.Bool("no-embedded-fonts", false, "(tty, debug) skip embedded fonts and rely on bootstrap discovery")
 	flagSend      = flag.String("send", "", "(tty) scripted-input mode: send these keystrokes and exit. "+
 		"Escapes: \\n=Enter \\t=Tab \\b=Backspace \\e=Esc \\^x=Ctrl+x \\U \\D \\L \\R = arrows.")
 	flagSendDelay = flag.Duration("send-delay", 80_000_000, "(tty) delay between scripted keystrokes")
