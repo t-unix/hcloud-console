@@ -121,14 +121,27 @@ Ctrl+C stops the local server.
 - vi: insert mode, normal-mode commands, **`:` line mode** (`:wq`,
   `:%s/foo/bar/g`, …), search (`/`, `?`).
 
+### Tested OS coverage
+
+The decoder tries every (cell-size × font) combination and picks the one
+with the highest exact-match rate on non-blank cells, so it auto-selects
+the right font for whatever the VM is running:
+
+| OS                                | Cell size | Font picked        | Match rate |
+| --- | --- | --- | --- |
+| Debian / Ubuntu (kernel fbcon)    | 8×16      | `uni2-fixed16`     | 100% |
+| OpenBSD (BIOS/VGA text mode)      | 9×16      | `seabios-vga-8x16` | 100% |
+| FreeBSD, NetBSD, BIOS-mode Linux  | 9×16      | `seabios-vga-8x16` | (same path) |
+
+To add another OS that uses a different font, drop the bitmap into
+`font.go` and append to the `fonts` slice — the auto-selector picks it
+up automatically.
+
 ### Limitations of terminal mode
 
-- Linux text-mode console only. When the VM switches to a graphical mode
-  (X server, framebuffer console with a custom font), match rate drops
-  and the tool prints a notice. Open the browser console for those.
-- The embedded font is Debian's `Uni2-Fixed16` (8×16). The
-  hamming-distance fallback handles small variations, but very different
-  fonts (e.g. UEFI splash text in unusual fonts) won't decode.
+- Text mode only. When the VM switches to a graphical mode (X server,
+  framebuffer console with a custom font), exact-match rate drops and
+  the tool prints a notice. Open the browser console for those.
 - No mouse, no clipboard. Copy text directly from your terminal's
   selection buffer.
 
@@ -138,3 +151,6 @@ Ctrl+C stops the local server.
 - `console_8x16.psf` — `Uni2-Fixed16.psf` from Debian's `console-setup`
   package, originally built from the X.Org "Fixed" 8×16 BDF (MIT/X11
   licensed).
+- `vga_8x16.bin` — SeaBIOS/QEMU `vgafont16` (the font QEMU's emulated
+  VGA card actually renders to the framebuffer); originally derived
+  from public-domain DOS 8×16 fonts collected by Joseph Gil.
