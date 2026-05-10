@@ -68,6 +68,8 @@ func runTTY(wsURL, password string) error {
 	defer signal.Stop(winch)
 	go func() {
 		for range winch {
+			w, h, _ := term.GetSize(int(os.Stdout.Fd()))
+			debug("SIGWINCH: terminal now %dx%d → forcing full redraw", w, h)
 			rend.RequestFull()
 		}
 	}()
